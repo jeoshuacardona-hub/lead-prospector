@@ -8,7 +8,7 @@ let browserInstance = null;
  */
 async function getBrowser() {
   if (!browserInstance || !browserInstance.isConnected()) {
-    browserInstance = await puppeteer.launch({
+    const launchOptions = {
       headless: 'new',
       args: [
         '--no-sandbox',
@@ -22,7 +22,13 @@ async function getBrowser() {
         '--disable-features=IsolateOrigins,site-per-process',
         '--disable-blink-features=AutomationControlled'
       ]
-    });
+    };
+
+    if (process.env.PUPPETEER_EXECUTABLE_PATH) {
+      launchOptions.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
+    }
+
+    browserInstance = await puppeteer.launch(launchOptions);
   }
   return browserInstance;
 }
@@ -60,6 +66,17 @@ async function searchGoogleMaps(city, niche, limit = 20) {
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     );
     await page.setViewport({ width: 1920, height: 1080 });
+
+    // Optimize performance: intercept and block images, fonts, and media to save memory and CPU
+    await page.setRequestInterception(true);
+    page.on('request', (req) => {
+      const type = req.resourceType();
+      if (type === 'image' || type === 'font' || type === 'media') {
+        req.abort();
+      } else {
+        req.continue();
+      }
+    });
 
     // Set extra headers to appear more like a real browser
     await page.setExtraHTTPHeaders({
