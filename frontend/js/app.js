@@ -42,6 +42,7 @@ function router() {
       api.setToken(null);
       isRestoring = false;
       window.location.hash = '#login';
+      router(); // Force rendering of login page
     });
     // Show loading while restoring
     mainContent.innerHTML = `
@@ -94,6 +95,9 @@ function router() {
 // Listen for hash changes
 window.addEventListener('hashchange', router);
 window.addEventListener('load', router);
+
+// Run router immediately on module load
+router();
 
 // Global logout
 window.logout = () => {
