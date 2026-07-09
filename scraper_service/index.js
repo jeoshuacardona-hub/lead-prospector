@@ -63,7 +63,8 @@ app.post('/scrape', async (req, res) => {
       if (!res.headersSent) {
         res.status(500).json({ error: 'Error interno en la cola de tareas' });
       }
-    });
+    })
+    .then(() => {}); // Ensure queue is always resolved for subsequent runs
 });
 
 /**
@@ -202,6 +203,7 @@ async function runScraper(city, niche, limit) {
   }
 
   console.log('🚀 Levantando navegador Chrome limpio...');
+  const startTime = Date.now();
   const browser = await puppeteer.launch(launchOptions);
   const page = await browser.newPage();
 
@@ -284,7 +286,7 @@ async function runScraper(city, niche, limit) {
       let noHeightChangeLimit = 3;
       let noHeightChangeCount = 0;
 
-      for (let i = 0; i < 15; i++) {
+      for (let i = 0; i < 8; i++) {
         const visibleCount = await page.$$eval(
           'a[href*="/maps/place"]',
           (links) => {
@@ -294,7 +296,8 @@ async function runScraper(city, niche, limit) {
           }
         );
         console.log(`🔍 Resultados cargados en pantalla: ${visibleCount} / ${limit}`);
-        if (visibleCount >= Math.max(limit * 2, 20)) {
+        const targetLoad = Math.min(Math.max(limit * 1.5, 10), 30);
+        if (visibleCount >= targetLoad) {
           console.log(`✅ Suficientes resultados cargados en pantalla (${visibleCount}).`);
           break;
         }
@@ -304,7 +307,7 @@ async function runScraper(city, niche, limit) {
           el.scrollTop = el.scrollHeight;
         }, scrollable);
         
-        await delay(1500);
+        await delay(1000);
 
         const currentHeight = await page.evaluate((el) => el.scrollHeight, scrollable);
         if (currentHeight === previousHeight) {
@@ -330,6 +333,12 @@ async function runScraper(city, niche, limit) {
 
     // Loop through cards until we find enough leads that have a phone number or email, up to a safety limit
     while (results.length < limit && cardIndex < cards.length && cardIndex < Math.max(limit * 2, 30)) {
+      // Hard time limit check (32 seconds)
+      if (Date.now() - startTime > 32000) {
+        console.log(`⚠️ Límite de tiempo de seguridad de 32s alcanzado. Deteniendo búsqueda y retornando ${results.length} leads obtenidos.`);
+        break;
+      }
+
       const card = cards[cardIndex];
       const currentIndex = cardIndex;
       cardIndex++;
@@ -344,7 +353,24 @@ async function runScraper(city, niche, limit) {
 
         // Click the card natively using Puppeteer's simulated mouse click
         await card.click();
-        await delay(1500); // Allow AJAX details to load
+        
+        // Wait dynamically for detail panel title to update (max 2000ms)
+        try {
+          await page.waitForFunction(
+            (expectedName) => {
+              const h1s = Array.from(document.querySelectorAll('h1'));
+              const detailH1 = h1s.find(h1 => h1.textContent.trim() !== 'Resultados');
+              if (!detailH1) return false;
+              const text = detailH1.textContent.trim().toLowerCase();
+              const expected = expectedName.toLowerCase();
+              return text.includes(expected) || expected.includes(text);
+            },
+            { timeout: 2000 },
+            cardName
+          );
+        } catch (e) {
+          await delay(800); // safe fallback if title wait times out
+        }
 
         const businessData = await page.evaluate(() => {
           const data = {};
@@ -408,10 +434,21 @@ async function runScraper(city, niche, limit) {
         businessData.google_maps_url = placeUrl;
 
         // Fallback name if h1 was wrong, empty, or showing sponsored/results header
-        const badNames = ['', 'Resultados', 'Patrocinado', 'Sponsored'];
-        if (!businessData.business_name || badNames.includes(businessData.business_name)) {
-          businessData.business_name = cardName.replace(/·/g, '').trim();
+        const isBadName = (name) => {
+          if (!name) return true;
+          const clean = name.toLowerCase().trim();
+          return clean.includes('patrocinado') || 
+                 clean.includes('sponsored') || 
+                 clean.includes('resultados') || 
+                 clean.includes('results') || 
+                 clean === '';
+        };
+
+        let finalName = businessData.business_name;
+        if (isBadName(finalName)) {
+          finalName = cardName;
         }
+        businessData.business_name = finalName.replace(/[\ue5d4]/g, '').replace(/·/g, '').trim();
 
         // Fast filter: keep leads that have a phone number from Google Maps
         const hasPhone = businessData.phone && businessData.phone.trim().length > 2;
@@ -467,83 +504,97 @@ async function runScraper(city, niche, limit) {
  * Extract email and social media links from a website.
  */
 async function extractContactFromWebsite(url) {
-  const result = {
-    email: null,
-    instagram: null,
-    facebook: null,
-    tiktok: null,
-    linkedin: null
-  };
+  return new Promise(async (resolve) => {
+    const hardTimeout = setTimeout(() => {
+      console.log(`⚠️ Límite de tiempo alcanzado para enriquecer: ${url}`);
+      resolve({ email: null, instagram: null, facebook: null, tiktok: null, linkedin: null });
+    }, 4500);
 
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 4000);
+    const result = {
+      email: null,
+      instagram: null,
+      facebook: null,
+      tiktok: null,
+      linkedin: null
+    };
 
-    const response = await fetch(url, {
-      signal: controller.signal,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8'
-      },
-      redirect: 'follow'
-    });
-    clearTimeout(timeout);
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 3500);
 
-    if (!response.ok) return result;
+      const response = await fetch(url, {
+        signal: controller.signal,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8'
+        },
+        redirect: 'follow'
+      });
+      clearTimeout(timeout);
 
-    const contentType = response.headers.get('content-type') || '';
-    if (!contentType.includes('text/html')) return result;
+      if (!response.ok) {
+        clearTimeout(hardTimeout);
+        return resolve(result);
+      }
 
-    const html = await response.text();
-    const $ = cheerio.load(html);
-    const fullText = $.html();
+      const contentType = response.headers.get('content-type') || '';
+      if (!contentType.includes('text/html')) {
+        clearTimeout(hardTimeout);
+        return resolve(result);
+      }
 
-    const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
-    const emails = fullText.match(emailRegex) || [];
+      const html = await response.text();
+      const $ = cheerio.load(html);
+      const fullText = $.html();
 
-    const invalidPatterns = [
-      'example', 'sentry', 'webpack', 'wixpress', 'schema.org',
-      'wordpress', 'gravatar', 'googleapis', 'google.com',
-      'w3.org', 'facebook.com', 'twitter.com', 'jquery',
-      'bootstrap', 'cloudflare', 'jsdelivr'
-    ];
-    const invalidExtensions = ['.png', '.jpg', '.jpeg', '.svg', '.gif', '.webp', '.css', '.js'];
+      const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+      const emails = fullText.match(emailRegex) || [];
 
-    const validEmails = emails.filter(e => {
-      const lower = e.toLowerCase();
-      if (invalidExtensions.some(ext => lower.endsWith(ext))) return false;
-      if (invalidPatterns.some(pattern => lower.includes(pattern))) return false;
-      if (lower.length > 60) return false;
-      return true;
-    });
+      const invalidPatterns = [
+        'example', 'sentry', 'webpack', 'wixpress', 'schema.org',
+        'wordpress', 'gravatar', 'googleapis', 'google.com',
+        'w3.org', 'facebook.com', 'twitter.com', 'jquery',
+        'bootstrap', 'cloudflare', 'jsdelivr'
+      ];
+      const invalidExtensions = ['.png', '.jpg', '.jpeg', '.svg', '.gif', '.webp', '.css', '.js'];
 
-    if (validEmails.length > 0) {
-      result.email = validEmails[0];
+      const validEmails = emails.filter(e => {
+        const lower = e.toLowerCase();
+        if (invalidExtensions.some(ext => lower.endsWith(ext))) return false;
+        if (invalidPatterns.some(pattern => lower.includes(pattern))) return false;
+        if (lower.length > 60) return false;
+        return true;
+      });
+
+      if (validEmails.length > 0) {
+        result.email = validEmails[0];
+      }
+
+      $('a[href]').each((_, el) => {
+        const href = ($(el).attr('href') || '').toLowerCase();
+
+        if (href.includes('instagram.com/') && !result.instagram) {
+          result.instagram = $(el).attr('href');
+        }
+        if (href.includes('facebook.com/') && !result.facebook) {
+          result.facebook = $(el).attr('href');
+        }
+        if (href.includes('tiktok.com/') && !result.tiktok) {
+          result.tiktok = $(el).attr('href');
+        }
+        if (href.includes('linkedin.com/') && !result.linkedin) {
+          result.linkedin = $(el).attr('href');
+        }
+      });
+
+      clearTimeout(hardTimeout);
+      resolve(result);
+    } catch (err) {
+      clearTimeout(hardTimeout);
+      resolve(result);
     }
-
-    $('a[href]').each((_, el) => {
-      const href = ($(el).attr('href') || '').toLowerCase();
-
-      if (href.includes('instagram.com/') && !result.instagram) {
-        result.instagram = $(el).attr('href');
-      }
-      if (href.includes('facebook.com/') && !result.facebook) {
-        result.facebook = $(el).attr('href');
-      }
-      if (href.includes('tiktok.com/') && !result.tiktok) {
-        result.tiktok = $(el).attr('href');
-      }
-      if (href.includes('linkedin.com/') && !result.linkedin) {
-        result.linkedin = $(el).attr('href');
-      }
-    });
-
-  } catch (err) {
-    // Ignore
-  }
-
-  return result;
+  });
 }
 
 app.listen(PORT, () => {
