@@ -295,34 +295,20 @@ async function runScraper(city, niche, limit) {
         const placeUrl = await page.evaluate(() => window.location.href);
         businessData.google_maps_url = placeUrl;
 
-        // Fallback name if h1 was wrong or empty
-        if (!businessData.business_name || businessData.business_name === 'Resultados') {
+        // Fallback name if h1 was wrong, empty, or showing sponsored/results header
+        const badNames = ['', 'Resultados', 'Patrocinado', 'Sponsored'];
+        if (!businessData.business_name || badNames.includes(businessData.business_name)) {
           businessData.business_name = cardName.replace(/·/g, '').trim();
         }
 
-        // Try fast website extraction immediately
-        if (businessData.website) {
-          try {
-            const contactInfo = await extractContactFromWebsite(businessData.website);
-            if (contactInfo.email) businessData.email = contactInfo.email;
-            if (contactInfo.instagram) businessData.instagram = contactInfo.instagram;
-            if (contactInfo.facebook) businessData.facebook = contactInfo.facebook;
-            if (contactInfo.tiktok) businessData.tiktok = contactInfo.tiktok;
-            if (contactInfo.linkedin) businessData.linkedin = contactInfo.linkedin;
-          } catch (e) {
-            // Ignore
-          }
-        }
-
-        // Validation Rule: Must have a phone number OR an email
+        // Fast filter: keep leads that have a phone number from Google Maps
         const hasPhone = businessData.phone && businessData.phone.trim().length > 2;
-        const hasEmail = businessData.email && businessData.email.trim().length > 2;
 
-        if (hasPhone || hasEmail) {
-          console.log(`    ✅ Lead Guardado (${results.length + 1}/${limit}): "${businessData.business_name}" (Teléfono: ${businessData.phone || '-'}, Email: ${businessData.email || '-'})`);
+        if (hasPhone) {
+          console.log(`    ✅ Lead Guardado (${results.length + 1}/${limit}): "${businessData.business_name}" (Tel: ${businessData.phone})`);
           results.push(businessData);
         } else {
-          console.log(`    ❌ Lead Descartado: No tiene teléfono ni email.`);
+          console.log(`    ⏭️ Sin teléfono en Maps, continuando...`);
         }
 
         await randomDelay(200, 500);
@@ -331,7 +317,28 @@ async function runScraper(city, niche, limit) {
       }
     }
 
-    console.log(`✅ Prospección finalizada. Encontrados ${results.length} leads calificados de un total de ${cardIndex} inspeccionados.`);
+    console.log(`✅ Prospección Maps finalizada. ${results.length} leads con teléfono de ${cardIndex} inspeccionados.`);
+
+    // Enriquecimiento paralelo: extraer emails y redes sociales de los websites (máx 4s total)
+    if (results.length > 0) {
+      console.log('📧 Enriqueciendo leads con datos de websites en paralelo...');
+      await Promise.all(results.map(async (result) => {
+        if (result.website) {
+          try {
+            const contactInfo = await extractContactFromWebsite(result.website);
+            if (contactInfo.email) result.email = contactInfo.email;
+            if (contactInfo.instagram) result.instagram = contactInfo.instagram;
+            if (contactInfo.facebook) result.facebook = contactInfo.facebook;
+            if (contactInfo.tiktok) result.tiktok = contactInfo.tiktok;
+            if (contactInfo.linkedin) result.linkedin = contactInfo.linkedin;
+          } catch (e) {
+            // Ignore timeouts
+          }
+        }
+      }));
+      const enrichedCount = results.filter(r => r.email).length;
+      console.log(`📧 ${enrichedCount}/${results.length} leads enriquecidos con email/redes.`);
+    }
 
     return results;
   } catch (error) {
