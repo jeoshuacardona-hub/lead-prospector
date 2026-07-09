@@ -63,8 +63,15 @@ async function seed() {
     console.log('\n🎉 Seed completado exitosamente');
   } catch (error) {
     console.error('❌ Error en seed:', error.message);
-    process.exit(1);
+    if (require.main === module) {
+      process.exit(1);
+    }
+    throw error;
   }
 }
 
-seed();
+if (require.main === module) {
+  seed();
+} else {
+  module.exports = { seed };
+}

@@ -3,7 +3,8 @@ const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
-const { initDb } = require('./db/database');
+const { initDb, getDb } = require('./db/database');
+const { seed } = require('./seed');
 
 // Import routes
 const authRoutes = require('./routes/auth');
@@ -81,6 +82,16 @@ async function startServer() {
   try {
     await initDb();
     console.log('✅ Base de datos inicializada correctamente');
+    
+    // Auto-seed if the database is brand new (0 users)
+    const db = getDb();
+    const { count } = await db.prepare('SELECT COUNT(*) as count FROM users').get();
+    if (count === 0) {
+      console.log('ℹ️  Base de datos vacía detectada, ejecutando auto-seeding...');
+      await seed();
+    } else {
+      console.log(`ℹ️  Base de datos activa con ${count} usuarios registrados`);
+    }
     
     app.listen(PORT, () => {
       console.log(`🚀 Lead Prospector API corriendo en http://localhost:${PORT}`);
