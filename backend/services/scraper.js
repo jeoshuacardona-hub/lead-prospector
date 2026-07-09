@@ -95,31 +95,56 @@ async function runScraper(city, niche, limit = 20) {
 
     console.log(`🌐 Navegando a Google Maps: ${searchQuery}`);
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    
-    // Wait for the results feed or fallback to a timeout
-    try {
-      await page.waitForSelector('a[href*="/maps/place"]', { timeout: 10000 });
-    } catch (e) {
-      await delay(4000);
-    }
+    await delay(2000); // Wait for initial render
 
-    // Accept cookies if prompted
+    // Accept cookies if prompted (EU/GDPR)
     try {
       const acceptBtn = await page.$(
-        '[aria-label="Accept all"], [aria-label="Aceptar todo"], button[jsname="b3VHJd"]'
+        '[aria-label="Accept all"], [aria-label="Aceptar todo"], [aria-label="Aceptar"], button[jsname="b3VHJd"]'
       );
       if (acceptBtn) {
+        console.log('🍪 Aceptando diálogo de cookies...');
         await acceptBtn.click();
-        await delay(1000);
+        await delay(1500);
       }
     } catch (e) {
       // Cookie dialog may not appear
     }
 
+    // Wait for the results feed or fallback to a timeout
+    try {
+      await page.waitForSelector('a[href*="/maps/place"]', { timeout: 15000 });
+    } catch (e) {
+      console.log('⚠️ Timeout esperando a los resultados, continuando...');
+    }
+
     // Scroll results panel to load more results (Google Maps lazy-loads)
-    console.log('📜 Desplazando panel de resultados para cargar más negocios...');
-    const scrollable = await page.$('div[role="feed"]');
+    console.log('📜 Buscando contenedor scrollable de resultados...');
+    let scrollable = await page.$('div[role="feed"]');
+    
+    if (!scrollable) {
+      // Find the scrollable parent of the first result link dynamically
+      const handle = await page.evaluateHandle(() => {
+        const link = document.querySelector('a[href*="/maps/place"]');
+        if (link) {
+          let parent = link.parentElement;
+          while (parent && parent !== document.body) {
+            const overflow = window.getComputedStyle(parent).overflowY;
+            if (overflow === 'auto' || overflow === 'scroll') {
+              return parent;
+            }
+            parent = parent.parentElement;
+          }
+        }
+        return null;
+      });
+      if (handle && handle.asElement()) {
+        scrollable = handle.asElement();
+      }
+    }
+
     if (scrollable) {
+      console.log('📜 Desplazando panel de resultados para cargar más negocios...');
       let previousHeight = 0;
       for (let i = 0; i < 8; i++) {
         await page.evaluate((el) => {
@@ -139,8 +164,11 @@ async function runScraper(city, niche, limit = 20) {
             return seen.size;
           }
         );
+        console.log(`🔍 Resultados cargados en pantalla: ${visibleCount} / ${limit}`);
         if (visibleCount >= limit) break;
       }
+    } else {
+      console.log('⚠️ No se pudo encontrar el contenedor scrollable, intentando extraer resultados visibles...');
     }
 
     // Get all unique place links from the feed
