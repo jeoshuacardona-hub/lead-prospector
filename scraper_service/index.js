@@ -220,19 +220,26 @@ async function runScraper(city, niche, limit) {
         const cardName = await page.evaluate(el => el.getAttribute('aria-label') || el.textContent.trim(), cards[i]);
         console.log(`  📍 Extrayendo negocio ${i + 1}/${maxResults}: ${cardName.substring(0, 50)}...`);
 
-        // Click the card and wait for the detail panel to load via AJAX
-        await cards[i].click();
-        await delay(1200);
+        // Click the card in the browser context reliably and wait for the detail panel
+        await page.evaluate((el) => {
+          el.scrollIntoView();
+          el.click();
+        }, cards[i]);
+        await delay(1800);
 
         const businessData = await page.evaluate(() => {
           const data = {};
-          const nameEl = document.querySelector('h1');
-          data.business_name = nameEl ? nameEl.textContent.trim() : '';
+          const container = document.querySelector('div[role="main"]') || document;
 
-          const ratingEl = document.querySelector('div.F7nice span[aria-hidden="true"]');
+          // Business name
+          const nameEl = container.querySelector('h1');
+          const nameText = nameEl ? nameEl.textContent.trim() : '';
+          data.business_name = nameText !== 'Resultados' ? nameText : '';
+
+          const ratingEl = container.querySelector('div.F7nice span[aria-hidden="true"]');
           data.rating = ratingEl ? parseFloat(ratingEl.textContent) : null;
 
-          const reviewsEl = document.querySelector(
+          const reviewsEl = container.querySelector(
             'div.F7nice span[aria-label*="review"], div.F7nice span[aria-label*="reseña"]'
           );
           if (reviewsEl) {
@@ -242,7 +249,7 @@ async function runScraper(city, niche, limit) {
             data.reviews_count = null;
           }
 
-          const buttons = document.querySelectorAll('button[data-item-id], a[data-item-id]');
+          const buttons = container.querySelectorAll('button[data-item-id], a[data-item-id]');
           buttons.forEach(btn => {
             const itemId = btn.getAttribute('data-item-id') || '';
             const text = btn.textContent.trim();
@@ -260,7 +267,7 @@ async function runScraper(city, niche, limit) {
           });
 
           if (!data.address) {
-            const addressBtn = document.querySelector(
+            const addressBtn = container.querySelector(
               '[data-tooltip="Copiar la dirección"], [data-tooltip="Copy address"], button[aria-label*="ddress"], button[aria-label*="irección"]'
             );
             if (addressBtn) {
@@ -270,7 +277,7 @@ async function runScraper(city, niche, limit) {
           }
 
           if (!data.phone) {
-            const phoneBtn = document.querySelector(
+            const phoneBtn = container.querySelector(
               '[data-tooltip="Copiar el número de teléfono"], [data-tooltip="Copy phone number"], button[aria-label*="hone"], button[aria-label*="eléfono"]'
             );
             if (phoneBtn) {
@@ -280,20 +287,25 @@ async function runScraper(city, niche, limit) {
           }
 
           if (!data.website) {
-            const websiteLink = document.querySelector(
+            const websiteLink = container.querySelector(
               'a[data-item-id="authority"], a[aria-label*="ebsite"], a[aria-label*="itio web"]'
             );
             if (websiteLink) data.website = websiteLink.href;
           }
 
-          data.google_maps_url = window.location.href;
           return data;
         });
 
+        // Set maps URL
+        const placeUrl = await page.evaluate(() => window.location.href);
+        businessData.google_maps_url = placeUrl;
+
+        // Fallback name if h1 was wrong or empty
+        if (!businessData.business_name || businessData.business_name === 'Resultados') {
+          businessData.business_name = cardName.replace(/·/g, '').trim();
+        }
+
         if (businessData.business_name) {
-          results.push(businessData);
-        } else if (cardName) {
-          businessData.business_name = cardName;
           results.push(businessData);
         }
 
