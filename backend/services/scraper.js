@@ -7,54 +7,73 @@ const scraperUrls = (process.env.SCRAPER_SERVICE_URL || 'http://localhost:3002')
 let currentScraperIndex = 0;
 
 /**
- * Search Google Maps by forwarding the request to one of the scraper microservices (Node B).
- * Uses round-robin load balancing to rotate between configured scraper nodes.
- *
- * @param {string} city - The city to search in
- * @param {string} niche - The business niche to search for
- * @param {number} limit - Maximum number of results to return
- * @returns {Promise<Array>} Array of lead objects
+ * Send a scrape request to a single scraper node.
  */
-async function searchGoogleMaps(city, niche, limit = 5) {
-  if (scraperUrls.length === 0) {
-    throw new Error('No se han configurado URLs de microservicio Scraper.');
-  }
-
-  // Get the next scraper URL in the rotation
-  const targetUrl = scraperUrls[currentScraperIndex];
-  currentScraperIndex = (currentScraperIndex + 1) % scraperUrls.length;
+async function callScraper(targetUrl, city, niche, limit) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 90000);
 
   try {
-    console.log(`📡 [Balanceador Scraper] Enviando petición a: ${targetUrl} (Nodo ${currentScraperIndex + 1}/${scraperUrls.length})`);
-    
-    // Timeout de 90 segundos para evitar que la petición se cuelgue indefinidamente
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 90000);
-
     const response = await fetch(`${targetUrl}/scrape`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ city, niche, limit }),
       signal: controller.signal
     });
     clearTimeout(timeout);
 
     if (!response.ok) {
-      const errData = await response.json().catch(() => ({ error: 'Error desconocido en el microservicio' }));
-      throw new Error(errData.error || `HTTP ${response.status}`);
+      const statusCode = response.status;
+      const bodyText = await response.text().catch(() => '');
+      let errorMsg;
+      try {
+        const errData = JSON.parse(bodyText);
+        errorMsg = errData.error || `HTTP ${statusCode}`;
+      } catch {
+        errorMsg = `HTTP ${statusCode}${statusCode === 502 ? ' (scraper se quedó sin tiempo o memoria)' : ''}`;
+      }
+      console.error(`❌ Scraper ${targetUrl} respondió HTTP ${statusCode}: ${errorMsg}`);
+      throw new Error(errorMsg);
     }
 
-    const results = await response.json();
-    return results;
+    return await response.json();
   } catch (error) {
+    clearTimeout(timeout);
     if (error.name === 'AbortError') {
-      console.error(`⏰ Timeout de 90s alcanzado esperando al scraper (${targetUrl})`);
-      throw new Error('El buscador tardó demasiado. Intenta de nuevo en unos segundos.');
+      throw new Error('El buscador tardó demasiado (90s). Intenta de nuevo.');
     }
-    console.error(`❌ Error de comunicación con microservicio Scraper (${targetUrl}):`, error.message);
-    throw new Error(`El buscador en ${targetUrl} no responde o devolvió un error: ${error.message}`);
+    throw error;
+  }
+}
+
+/**
+ * Search Google Maps with automatic failover between scraper nodes.
+ */
+async function searchGoogleMaps(city, niche, limit = 5) {
+  if (scraperUrls.length === 0) {
+    throw new Error('No se han configurado URLs de microservicio Scraper.');
+  }
+
+  // Try each scraper in rotation, with failover to the next one
+  const startIndex = currentScraperIndex;
+  currentScraperIndex = (currentScraperIndex + 1) % scraperUrls.length;
+
+  for (let attempt = 0; attempt < scraperUrls.length; attempt++) {
+    const idx = (startIndex + attempt) % scraperUrls.length;
+    const targetUrl = scraperUrls[idx];
+
+    try {
+      console.log(`📡 [Balanceador Scraper] Enviando petición a: ${targetUrl} (Nodo ${idx + 1}/${scraperUrls.length})`);
+      const results = await callScraper(targetUrl, city, niche, limit);
+      return results;
+    } catch (error) {
+      console.error(`❌ Nodo ${idx + 1} falló: ${error.message}`);
+      if (attempt < scraperUrls.length - 1) {
+        console.log(`🔄 Intentando con el siguiente nodo scraper...`);
+      } else {
+        throw new Error(`Todos los scrapers fallaron. Último error: ${error.message}`);
+      }
+    }
   }
 }
 
