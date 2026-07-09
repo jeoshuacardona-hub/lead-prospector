@@ -85,7 +85,7 @@ app.post('/debug-scrape', async (req, res) => {
   addLog(`Starting debug scrape for ${niche} in ${city}`);
   
   const launchOptions = {
-    headless: 'new',
+    headless: true,
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
@@ -183,7 +183,7 @@ app.post('/debug-scrape', async (req, res) => {
  */
 async function runScraper(city, niche, limit) {
   const launchOptions = {
-    headless: 'new',
+    headless: true,
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
