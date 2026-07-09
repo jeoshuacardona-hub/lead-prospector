@@ -1,0 +1,16 @@
+{
+  "name": "lead-prospector-scraper-service",
+  "version": "1.0.0",
+  "description": "Scraper microservice for Google Maps and contact extraction",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "puppeteer": "^23.0.0",
+    "cheerio": "^1.0.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.0"
+  }
+}

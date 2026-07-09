@@ -1,0 +1,439 @@
+require('dotenv').config();
+const express = require('express');
+const cors = require('cors');
+const puppeteer = require('puppeteer');
+const cheerio = require('cheerio');
+
+const app = express();
+const PORT = process.env.PORT || 3002;
+
+app.use(cors());
+app.use(express.json());
+
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.json({ status: 'OK', service: 'Lead Prospector Scraper Service' });
+});
+
+/**
+ * Simple delay helper.
+ */
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Random delay helper.
+ */
+function randomDelay(min = 1000, max = 3000) {
+  return delay(Math.floor(Math.random() * (max - min) + min));
+}
+
+// Concurrency queue: restricts Puppeteer runs to exactly 1 at a time to prevent RAM exhaustion.
+let searchQueue = Promise.resolve();
+
+/**
+ * POST /scrape
+ * Trigger sequential scraping task.
+ */
+app.post('/scrape', async (req, res) => {
+  const { city, niche, limit = 5 } = req.body;
+
+  if (!city || !niche) {
+    return res.status(400).json({ error: 'Ciudad y nicho son requeridos' });
+  }
+
+  const searchLimit = Math.min(Math.max(parseInt(limit) || 5, 1), 50);
+
+  // Queue the scraping request sequentially
+  searchQueue = searchQueue
+    .then(async () => {
+      console.log(`⏱️ Iniciando búsqueda secuencial para: "${niche}" en "${city}" (Límite: ${searchLimit})`);
+      try {
+        const results = await runScraper(city, niche, searchLimit);
+        res.json(results);
+      } catch (err) {
+        console.error('❌ Error en ejecución de scraper:', err.message);
+        res.status(500).json({ error: 'Error al realizar la prospección: ' + err.message });
+      }
+    })
+    .catch((err) => {
+      console.error('❌ Error crítico en cola de scraper:', err);
+      // Ensure the client gets a response if the queue handler fails
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'Error interno en la cola de tareas' });
+      }
+    });
+});
+
+/**
+ * Scraper implementation that runs inside a clean Puppeteer browser instance.
+ */
+async function runScraper(city, niche, limit) {
+  const launchOptions = {
+    headless: 'new',
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+      '--no-first-run',
+      '--no-zygote',
+      '--disable-extensions',
+      '--disable-features=IsolateOrigins,site-per-process',
+      '--disable-blink-features=AutomationControlled'
+    ]
+  };
+
+  if (process.env.PUPPETEER_EXECUTABLE_PATH) {
+    launchOptions.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
+  }
+
+  console.log('🚀 Levantando navegador Chrome limpio...');
+  const browser = await puppeteer.launch(launchOptions);
+  const page = await browser.newPage();
+
+  try {
+    await page.setUserAgent(
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    );
+    await page.setViewport({ width: 1920, height: 1080 });
+
+    // Block image, font, and media requests to save up to 70% RAM
+    await page.setRequestInterception(true);
+    page.on('request', (req) => {
+      const type = req.resourceType();
+      if (type === 'image' || type === 'font' || type === 'media') {
+        req.abort();
+      } else {
+        req.continue();
+      }
+    });
+
+    await page.setExtraHTTPHeaders({
+      'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8'
+    });
+
+    const searchQuery = `${niche} ${city}`;
+    const url = `https://www.google.com/maps/search/${encodeURIComponent(searchQuery)}`;
+
+    console.log(`🌐 Navegando a Google Maps: ${searchQuery}`);
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await delay(2000);
+
+    // Accept cookies if prompted (EU/GDPR)
+    try {
+      const acceptBtn = await page.$(
+        '[aria-label="Accept all"], [aria-label="Aceptar todo"], [aria-label="Aceptar"], button[jsname="b3VHJd"]'
+      );
+      if (acceptBtn) {
+        console.log('🍪 Aceptando diálogo de cookies...');
+        await acceptBtn.click();
+        await delay(1500);
+      }
+    } catch (e) {
+      // Cookie dialog may not appear
+    }
+
+    // Wait for the results feed or fallback to a timeout
+    try {
+      await page.waitForSelector('a[href*="/maps/place"]', { timeout: 15000 });
+    } catch (e) {
+      console.log('⚠️ Timeout esperando a los resultados, continuando...');
+    }
+
+    // Scroll results panel to load more results (Google Maps lazy-loads)
+    console.log('📜 Buscando contenedor scrollable de resultados...');
+    let scrollable = await page.$('div[role="feed"]');
+    
+    if (!scrollable) {
+      const handle = await page.evaluateHandle(() => {
+        const link = document.querySelector('a[href*="/maps/place"]');
+        if (link) {
+          let parent = link.parentElement;
+          while (parent && parent !== document.body) {
+            const overflow = window.getComputedStyle(parent).overflowY;
+            if (overflow === 'auto' || overflow === 'scroll') {
+              return parent;
+            }
+            parent = parent.parentElement;
+          }
+        }
+        return null;
+      });
+      if (handle && handle.asElement()) {
+        scrollable = handle.asElement();
+      }
+    }
+
+    if (scrollable) {
+      console.log('📜 Desplazando panel de resultados...');
+      let previousHeight = 0;
+      let noHeightChangeLimit = 3;
+      let noHeightChangeCount = 0;
+
+      for (let i = 0; i < 15; i++) {
+        const visibleCount = await page.$$eval(
+          'a[href*="/maps/place"]',
+          (links) => {
+            const seen = new Set();
+            links.forEach(l => seen.add(l.href));
+            return seen.size;
+          }
+        );
+        console.log(`🔍 Resultados cargados en pantalla: ${visibleCount} / ${limit}`);
+        if (visibleCount >= limit) {
+          console.log(`✅ Límite de ${limit} resultados alcanzado en pantalla.`);
+          break;
+        }
+
+        await page.evaluate((el) => {
+          el.focus();
+          el.scrollTop = el.scrollHeight;
+        }, scrollable);
+        
+        await delay(2500);
+
+        const currentHeight = await page.evaluate((el) => el.scrollHeight, scrollable);
+        if (currentHeight === previousHeight) {
+          noHeightChangeCount++;
+          if (noHeightChangeCount >= noHeightChangeLimit) {
+            break;
+          }
+        } else {
+          noHeightChangeCount = 0;
+          previousHeight = currentHeight;
+        }
+      }
+    }
+
+    // Get all unique place links from the feed
+    const placeLinks = await page.$$eval('a[href*="/maps/place"]', (links) => {
+      const seen = new Set();
+      return links
+        .filter(link => {
+          const href = link.href;
+          if (seen.has(href)) return false;
+          seen.add(href);
+          return true;
+        })
+        .map(link => ({
+          url: link.href,
+          name: link.getAttribute('aria-label') || link.textContent.trim()
+        }));
+    });
+
+    console.log(`📋 Se encontraron ${placeLinks.length} enlaces de negocios`);
+
+    const results = [];
+    const maxResults = Math.min(placeLinks.length, limit);
+
+    // Visit each place page to extract detailed info
+    for (let i = 0; i < maxResults; i++) {
+      try {
+        console.log(`  📍 Extrayendo negocio ${i + 1}/${maxResults}: ${placeLinks[i].name.substring(0, 50)}...`);
+
+        try {
+          await page.goto(placeLinks[i].url, { waitUntil: 'domcontentloaded', timeout: 20000 });
+          await delay(1200);
+        } catch (gotoErr) {
+          console.log(`  ⚠️ Timeout de navegación en negocio ${i + 1} (${gotoErr.message}), intentando extraer datos...`);
+        }
+
+        const businessData = await page.evaluate(() => {
+          const data = {};
+          const nameEl = document.querySelector('h1');
+          data.business_name = nameEl ? nameEl.textContent.trim() : '';
+
+          const ratingEl = document.querySelector('div.F7nice span[aria-hidden="true"]');
+          data.rating = ratingEl ? parseFloat(ratingEl.textContent) : null;
+
+          const reviewsEl = document.querySelector(
+            'div.F7nice span[aria-label*="review"], div.F7nice span[aria-label*="reseña"]'
+          );
+          if (reviewsEl) {
+            const match = reviewsEl.textContent.match(/[\d,.]+/);
+            data.reviews_count = match ? parseInt(match[0].replace(/[,.\s]/g, '')) : 0;
+          } else {
+            data.reviews_count = null;
+          }
+
+          const buttons = document.querySelectorAll('button[data-item-id], a[data-item-id]');
+          buttons.forEach(btn => {
+            const itemId = btn.getAttribute('data-item-id') || '';
+            const text = btn.textContent.trim();
+            const ariaLabel = btn.getAttribute('aria-label') || '';
+
+            if (itemId === 'address' || itemId.startsWith('address')) {
+              data.address = ariaLabel.replace('Dirección: ', '').replace('Address: ', '') || text;
+            }
+            if (itemId === 'phone' || itemId.startsWith('phone')) {
+              data.phone = ariaLabel.replace('Teléfono: ', '').replace('Phone: ', '') || text;
+            }
+            if (itemId === 'authority') {
+              data.website = btn.href || ariaLabel.replace('Sitio web: ', '').replace('Website: ', '') || text;
+            }
+          });
+
+          if (!data.address) {
+            const addressBtn = document.querySelector(
+              '[data-tooltip="Copiar la dirección"], [data-tooltip="Copy address"], button[aria-label*="ddress"], button[aria-label*="irección"]'
+            );
+            if (addressBtn) {
+              data.address = (addressBtn.getAttribute('aria-label') || addressBtn.textContent).trim();
+              data.address = data.address.replace('Dirección: ', '').replace('Address: ', '');
+            }
+          }
+
+          if (!data.phone) {
+            const phoneBtn = document.querySelector(
+              '[data-tooltip="Copiar el número de teléfono"], [data-tooltip="Copy phone number"], button[aria-label*="hone"], button[aria-label*="eléfono"]'
+            );
+            if (phoneBtn) {
+              data.phone = (phoneBtn.getAttribute('aria-label') || phoneBtn.textContent).trim();
+              data.phone = data.phone.replace('Teléfono: ', '').replace('Phone: ', '');
+            }
+          }
+
+          if (!data.website) {
+            const websiteLink = document.querySelector(
+              'a[data-item-id="authority"], a[aria-label*="ebsite"], a[aria-label*="itio web"]'
+            );
+            if (websiteLink) data.website = websiteLink.href;
+          }
+
+          data.google_maps_url = window.location.href;
+          return data;
+        });
+
+        if (businessData.business_name) {
+          results.push(businessData);
+        }
+
+        await randomDelay(800, 2000);
+      } catch (err) {
+        console.error(`  ⚠️ Error en negocio ${i + 1}:`, err.message);
+      }
+    }
+
+    console.log(`✅ Extracción de Google Maps completada: ${results.length} negocios`);
+
+    // Try to extract email and social media from websites using fast fetch + cheerio
+    console.log('📧 Extrayendo información de contacto de las páginas web...');
+    let enrichedCount = 0;
+    for (const result of results) {
+      if (result.website) {
+        try {
+          const contactInfo = await extractContactFromWebsite(result.website);
+          if (contactInfo.email && !result.email) {
+            result.email = contactInfo.email;
+            enrichedCount++;
+          }
+          if (contactInfo.instagram) result.instagram = contactInfo.instagram;
+          if (contactInfo.facebook) result.facebook = contactInfo.facebook;
+          if (contactInfo.tiktok) result.tiktok = contactInfo.tiktok;
+          if (contactInfo.linkedin) result.linkedin = contactInfo.linkedin;
+        } catch (err) {
+          // Ignore website connection timeouts
+        }
+      }
+    }
+    console.log(`📧 Se enriquecieron ${enrichedCount} leads con datos de contacto`);
+
+    return results;
+  } catch (error) {
+    console.error('❌ Scraper error:', error.message);
+    throw error;
+  } finally {
+    console.log('🧹 Cerrando navegador Chrome y liberando RAM...');
+    await page.close().catch(() => {});
+    await browser.close().catch(() => {});
+  }
+}
+
+/**
+ * Extract email and social media links from a website.
+ */
+async function extractContactFromWebsite(url) {
+  const result = {
+    email: null,
+    instagram: null,
+    facebook: null,
+    tiktok: null,
+    linkedin: null
+  };
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8'
+      },
+      redirect: 'follow'
+    });
+    clearTimeout(timeout);
+
+    if (!response.ok) return result;
+
+    const contentType = response.headers.get('content-type') || '';
+    if (!contentType.includes('text/html')) return result;
+
+    const html = await response.text();
+    const $ = cheerio.load(html);
+    const fullText = $.html();
+
+    const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+    const emails = fullText.match(emailRegex) || [];
+
+    const invalidPatterns = [
+      'example', 'sentry', 'webpack', 'wixpress', 'schema.org',
+      'wordpress', 'gravatar', 'googleapis', 'google.com',
+      'w3.org', 'facebook.com', 'twitter.com', 'jquery',
+      'bootstrap', 'cloudflare', 'jsdelivr'
+    ];
+    const invalidExtensions = ['.png', '.jpg', '.jpeg', '.svg', '.gif', '.webp', '.css', '.js'];
+
+    const validEmails = emails.filter(e => {
+      const lower = e.toLowerCase();
+      if (invalidExtensions.some(ext => lower.endsWith(ext))) return false;
+      if (invalidPatterns.some(pattern => lower.includes(pattern))) return false;
+      if (lower.length > 60) return false;
+      return true;
+    });
+
+    if (validEmails.length > 0) {
+      result.email = validEmails[0];
+    }
+
+    $('a[href]').each((_, el) => {
+      const href = ($(el).attr('href') || '').toLowerCase();
+
+      if (href.includes('instagram.com/') && !result.instagram) {
+        result.instagram = $(el).attr('href');
+      }
+      if (href.includes('facebook.com/') && !result.facebook) {
+        result.facebook = $(el).attr('href');
+      }
+      if (href.includes('tiktok.com/') && !result.tiktok) {
+        result.tiktok = $(el).attr('href');
+      }
+      if (href.includes('linkedin.com/') && !result.linkedin) {
+        result.linkedin = $(el).attr('href');
+      }
+    });
+
+  } catch (err) {
+    // Ignore
+  }
+
+  return result;
+}
+
+app.listen(PORT, () => {
+  console.log(`🚀 Microservicio Scraper escuchando en puerto ${PORT}`);
+});
