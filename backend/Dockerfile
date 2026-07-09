@@ -17,27 +17,20 @@ ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
 
 WORKDIR /app
 
-# Copy package lists for dependency caching
+# Copy backend package files
 COPY backend/package*.json ./backend/
-COPY frontend/package*.json ./frontend/
 
-# Install backend dependencies
+# Install backend production dependencies
 WORKDIR /app/backend
 RUN npm ci --only=production
 
-# Install frontend dependencies and build static assets
-WORKDIR /app/frontend
-RUN npm install
-# Set VITE_API_URL to relative /api so it queries the same host
-ENV VITE_API_URL=/api
-COPY frontend/ ./
-RUN npm run build
-
-# Copy remaining backend source files
-WORKDIR /app/backend
-COPY backend/ ./
+# Copy remaining source code
+WORKDIR /app
+COPY backend/ ./backend/
+COPY frontend/ ./frontend/
 
 # Expose backend port
+WORKDIR /app/backend
 EXPOSE 3001
 
 CMD [ "npm", "start" ]
