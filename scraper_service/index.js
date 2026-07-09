@@ -182,8 +182,8 @@ async function runScraper(city, niche, limit) {
           }
         );
         console.log(`🔍 Resultados cargados en pantalla: ${visibleCount} / ${limit}`);
-        if (visibleCount >= limit) {
-          console.log(`✅ Límite de ${limit} resultados alcanzado en pantalla.`);
+        if (visibleCount >= Math.max(limit * 3, 30)) {
+          console.log(`✅ Límite de ${Math.max(limit * 3, 30)} resultados alcanzado en pantalla.`);
           break;
         }
 
@@ -217,7 +217,7 @@ async function runScraper(city, niche, limit) {
     console.log(`🔍 Iniciando filtrado inteligente de prospectos (Objetivo: ${limit} leads con teléfono o email)`);
 
     // Loop through cards until we find enough leads that have a phone number or email, up to a safety limit
-    while (results.length < limit && cardIndex < cards.length && cardIndex < 40) {
+    while (results.length < limit && cardIndex < cards.length && cardIndex < Math.max(limit * 3, 50)) {
       const card = cards[cardIndex];
       const currentIndex = cardIndex;
       cardIndex++;
@@ -236,7 +236,8 @@ async function runScraper(city, niche, limit) {
 
         const businessData = await page.evaluate(() => {
           const data = {};
-          const container = document.querySelector('div[role="main"]') || document;
+          const containers = Array.from(document.querySelectorAll('div[role="main"]'));
+          const container = containers.find(c => !c.querySelector('[role="feed"]')) || document;
 
           // Business name
           const nameEl = container.querySelector('h1');
