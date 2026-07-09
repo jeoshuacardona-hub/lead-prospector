@@ -286,7 +286,7 @@ async function runScraper(city, niche, limit) {
       let noHeightChangeLimit = 3;
       let noHeightChangeCount = 0;
 
-      for (let i = 0; i < 8; i++) {
+      for (let i = 0; i < 12; i++) {
         const visibleCount = await page.$$eval(
           'a[href*="/maps/place"]',
           (links) => {
@@ -296,7 +296,7 @@ async function runScraper(city, niche, limit) {
           }
         );
         console.log(`🔍 Resultados cargados en pantalla: ${visibleCount} / ${limit}`);
-        const targetLoad = Math.min(Math.max(limit * 1.5, 10), 30);
+        const targetLoad = Math.min(Math.max(limit * 3, 20), 50);
         if (visibleCount >= targetLoad) {
           console.log(`✅ Suficientes resultados cargados en pantalla (${visibleCount}).`);
           break;
