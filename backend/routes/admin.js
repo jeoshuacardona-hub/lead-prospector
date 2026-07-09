@@ -263,11 +263,11 @@ router.get('/stats', async (req, res) => {
     if (db.isPostgres) {
       weekHistoryQuery = `
         SELECT
-          to_char(created_at, 'YYYY-"W"IW') as week,
+          to_char(created_at, 'YYYY') || '-W' || to_char(created_at, 'IW') as week,
           COUNT(*) as count
         FROM leads
         WHERE created_at >= NOW() - INTERVAL '56 days'
-        GROUP BY week
+        GROUP BY to_char(created_at, 'YYYY') || '-W' || to_char(created_at, 'IW')
         ORDER BY week ASC
       `;
     } else {
