@@ -216,8 +216,12 @@ async function runScraper(city, niche, limit = 20) {
       try {
         console.log(`  📍 Extrayendo negocio ${i + 1}/${maxResults}: ${placeLinks[i].name.substring(0, 50)}...`);
 
-        await page.goto(placeLinks[i].url, { waitUntil: 'domcontentloaded', timeout: 10000 });
-        await delay(1000);
+        try {
+          await page.goto(placeLinks[i].url, { waitUntil: 'domcontentloaded', timeout: 20000 });
+          await delay(1200);
+        } catch (gotoErr) {
+          console.log(`  ⚠️ Timeout de navegación en negocio ${i + 1} (${gotoErr.message}), intentando extraer datos cargados...`);
+        }
 
         const businessData = await page.evaluate(() => {
           const data = {};
