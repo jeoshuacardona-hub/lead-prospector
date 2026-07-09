@@ -212,20 +212,27 @@ async function runScraper(city, niche, limit) {
     console.log(`📋 Se encontraron ${cards.length} elementos de negocios en el panel`);
 
     const results = [];
-    const maxResults = Math.min(cards.length, limit);
+    let cardIndex = 0;
 
-    // Click each card to load details via AJAX instead of reloading the page
-    for (let i = 0; i < maxResults; i++) {
+    console.log(`🔍 Iniciando filtrado inteligente de prospectos (Objetivo: ${limit} leads con teléfono o email)`);
+
+    // Loop through cards until we find enough leads that have a phone number or email, up to a safety limit
+    while (results.length < limit && cardIndex < cards.length && cardIndex < 40) {
+      const card = cards[cardIndex];
+      const currentIndex = cardIndex;
+      cardIndex++;
+
       try {
-        const cardName = await page.evaluate(el => el.getAttribute('aria-label') || el.textContent.trim(), cards[i]);
-        console.log(`  📍 Extrayendo negocio ${i + 1}/${maxResults}: ${cardName.substring(0, 50)}...`);
+        const cardName = await page.evaluate(el => el.getAttribute('aria-label') || el.textContent.trim(), card);
+        console.log(`  📍 Evaluando negocio ${currentIndex + 1}/${cards.length}: ${cardName.substring(0, 50)}...`);
 
-        // Click the card in the browser context reliably and wait for the detail panel
-        await page.evaluate((el) => {
-          el.scrollIntoView();
-          el.click();
-        }, cards[i]);
-        await delay(1800);
+        // Scroll the element into view natively (center it to guarantee clickability)
+        await page.evaluate(el => el.scrollIntoView({ block: 'center', inline: 'center' }), card);
+        await delay(500);
+
+        // Click the card natively using Puppeteer's simulated mouse click
+        await card.click();
+        await delay(2000); // Allow AJAX details to load
 
         const businessData = await page.evaluate(() => {
           const data = {};
@@ -266,30 +273,17 @@ async function runScraper(city, niche, limit) {
             }
           });
 
+          // Fallbacks for missing info
           if (!data.address) {
-            const addressBtn = container.querySelector(
-              '[data-tooltip="Copiar la dirección"], [data-tooltip="Copy address"], button[aria-label*="ddress"], button[aria-label*="irección"]'
-            );
-            if (addressBtn) {
-              data.address = (addressBtn.getAttribute('aria-label') || addressBtn.textContent).trim();
-              data.address = data.address.replace('Dirección: ', '').replace('Address: ', '');
-            }
+            const addressBtn = container.querySelector('[data-tooltip="Copiar la dirección"], [data-tooltip="Copy address"]');
+            if (addressBtn) data.address = addressBtn.textContent.trim();
           }
-
           if (!data.phone) {
-            const phoneBtn = container.querySelector(
-              '[data-tooltip="Copiar el número de teléfono"], [data-tooltip="Copy phone number"], button[aria-label*="hone"], button[aria-label*="eléfono"]'
-            );
-            if (phoneBtn) {
-              data.phone = (phoneBtn.getAttribute('aria-label') || phoneBtn.textContent).trim();
-              data.phone = data.phone.replace('Teléfono: ', '').replace('Phone: ', '');
-            }
+            const phoneBtn = container.querySelector('[data-tooltip="Copiar el número de teléfono"], [data-tooltip="Copy phone number"]');
+            if (phoneBtn) data.phone = phoneBtn.textContent.trim();
           }
-
           if (!data.website) {
-            const websiteLink = container.querySelector(
-              'a[data-item-id="authority"], a[aria-label*="ebsite"], a[aria-label*="itio web"]'
-            );
+            const websiteLink = container.querySelector('a[data-item-id="authority"]');
             if (websiteLink) data.website = websiteLink.href;
           }
 
@@ -305,40 +299,38 @@ async function runScraper(city, niche, limit) {
           businessData.business_name = cardName.replace(/·/g, '').trim();
         }
 
-        if (businessData.business_name) {
-          results.push(businessData);
+        // Try fast website extraction immediately
+        if (businessData.website) {
+          try {
+            const contactInfo = await extractContactFromWebsite(businessData.website);
+            if (contactInfo.email) businessData.email = contactInfo.email;
+            if (contactInfo.instagram) businessData.instagram = contactInfo.instagram;
+            if (contactInfo.facebook) businessData.facebook = contactInfo.facebook;
+            if (contactInfo.tiktok) businessData.tiktok = contactInfo.tiktok;
+            if (contactInfo.linkedin) businessData.linkedin = contactInfo.linkedin;
+          } catch (e) {
+            // Ignore
+          }
         }
 
-        await randomDelay(400, 1000);
+        // Validation Rule: Must have a phone number OR an email
+        const hasPhone = businessData.phone && businessData.phone.trim().length > 2;
+        const hasEmail = businessData.email && businessData.email.trim().length > 2;
+
+        if (hasPhone || hasEmail) {
+          console.log(`    ✅ Lead Guardado (${results.length + 1}/${limit}): "${businessData.business_name}" (Teléfono: ${businessData.phone || '-'}, Email: ${businessData.email || '-'})`);
+          results.push(businessData);
+        } else {
+          console.log(`    ❌ Lead Descartado: No tiene teléfono ni email.`);
+        }
+
+        await randomDelay(300, 800);
       } catch (err) {
-        console.error(`  ⚠️ Error en negocio ${i + 1}:`, err.message);
+        console.error(`  ⚠️ Error en negocio index ${currentIndex + 1}:`, err.message);
       }
     }
 
-    console.log(`✅ Extracción de Google Maps completada: ${results.length} negocios`);
-
-    // Try to extract email and social media from websites in parallel to save time
-    console.log('📧 Extrayendo información de contacto de las páginas web en paralelo...');
-    let enrichedCount = 0;
-    
-    await Promise.all(results.map(async (result) => {
-      if (result.website) {
-        try {
-          const contactInfo = await extractContactFromWebsite(result.website);
-          if (contactInfo.email && !result.email) {
-            result.email = contactInfo.email;
-            enrichedCount++;
-          }
-          if (contactInfo.instagram) result.instagram = contactInfo.instagram;
-          if (contactInfo.facebook) result.facebook = contactInfo.facebook;
-          if (contactInfo.tiktok) result.tiktok = contactInfo.tiktok;
-          if (contactInfo.linkedin) result.linkedin = contactInfo.linkedin;
-        } catch (err) {
-          // Ignore connection timeouts
-        }
-      }
-    }));
-    console.log(`📧 Se enriquecieron ${enrichedCount} leads con datos de contacto`);
+    console.log(`✅ Prospección finalizada. Encontrados ${results.length} leads calificados de un total de ${cardIndex} inspeccionados.`);
 
     return results;
   } catch (error) {
