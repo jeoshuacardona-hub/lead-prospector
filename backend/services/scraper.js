@@ -27,13 +27,19 @@ async function searchGoogleMaps(city, niche, limit = 5) {
   try {
     console.log(`📡 [Balanceador Scraper] Enviando petición a: ${targetUrl} (Nodo ${currentScraperIndex + 1}/${scraperUrls.length})`);
     
+    // Timeout de 90 segundos para evitar que la petición se cuelgue indefinidamente
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 90000);
+
     const response = await fetch(`${targetUrl}/scrape`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({ city, niche, limit })
+      body: JSON.stringify({ city, niche, limit }),
+      signal: controller.signal
     });
+    clearTimeout(timeout);
 
     if (!response.ok) {
       const errData = await response.json().catch(() => ({ error: 'Error desconocido en el microservicio' }));
@@ -43,6 +49,10 @@ async function searchGoogleMaps(city, niche, limit = 5) {
     const results = await response.json();
     return results;
   } catch (error) {
+    if (error.name === 'AbortError') {
+      console.error(`⏰ Timeout de 90s alcanzado esperando al scraper (${targetUrl})`);
+      throw new Error('El buscador tardó demasiado. Intenta de nuevo en unos segundos.');
+    }
     console.error(`❌ Error de comunicación con microservicio Scraper (${targetUrl}):`, error.message);
     throw new Error(`El buscador en ${targetUrl} no responde o devolvió un error: ${error.message}`);
   }

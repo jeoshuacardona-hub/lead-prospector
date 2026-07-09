@@ -119,7 +119,7 @@ async function runScraper(city, niche, limit) {
 
     console.log(`🌐 Navegando a Google Maps: ${searchQuery}`);
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    await delay(2000);
+    await delay(1500);
 
     // Accept cookies if prompted (EU/GDPR)
     try {
@@ -182,8 +182,8 @@ async function runScraper(city, niche, limit) {
           }
         );
         console.log(`🔍 Resultados cargados en pantalla: ${visibleCount} / ${limit}`);
-        if (visibleCount >= Math.max(limit * 3, 30)) {
-          console.log(`✅ Límite de ${Math.max(limit * 3, 30)} resultados alcanzado en pantalla.`);
+        if (visibleCount >= Math.max(limit * 2, 20)) {
+          console.log(`✅ Suficientes resultados cargados en pantalla (${visibleCount}).`);
           break;
         }
 
@@ -192,7 +192,7 @@ async function runScraper(city, niche, limit) {
           el.scrollTop = el.scrollHeight;
         }, scrollable);
         
-        await delay(2500);
+        await delay(1500);
 
         const currentHeight = await page.evaluate((el) => el.scrollHeight, scrollable);
         if (currentHeight === previousHeight) {
@@ -217,7 +217,7 @@ async function runScraper(city, niche, limit) {
     console.log(`🔍 Iniciando filtrado inteligente de prospectos (Objetivo: ${limit} leads con teléfono o email)`);
 
     // Loop through cards until we find enough leads that have a phone number or email, up to a safety limit
-    while (results.length < limit && cardIndex < cards.length && cardIndex < Math.max(limit * 3, 50)) {
+    while (results.length < limit && cardIndex < cards.length && cardIndex < Math.max(limit * 2, 30)) {
       const card = cards[cardIndex];
       const currentIndex = cardIndex;
       cardIndex++;
@@ -228,11 +228,11 @@ async function runScraper(city, niche, limit) {
 
         // Scroll the element into view natively (center it to guarantee clickability)
         await page.evaluate(el => el.scrollIntoView({ block: 'center', inline: 'center' }), card);
-        await delay(500);
+        await delay(300);
 
         // Click the card natively using Puppeteer's simulated mouse click
         await card.click();
-        await delay(2000); // Allow AJAX details to load
+        await delay(1500); // Allow AJAX details to load
 
         const businessData = await page.evaluate(() => {
           const data = {};
@@ -325,7 +325,7 @@ async function runScraper(city, niche, limit) {
           console.log(`    ❌ Lead Descartado: No tiene teléfono ni email.`);
         }
 
-        await randomDelay(300, 800);
+        await randomDelay(200, 500);
       } catch (err) {
         console.error(`  ⚠️ Error en negocio index ${currentIndex + 1}:`, err.message);
       }
