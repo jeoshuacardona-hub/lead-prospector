@@ -14,24 +14,10 @@ const adminRoutes = require('./routes/admin');
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-const allowedOrigins = [
-  'http://localhost:5173',
-  'http://localhost:3000',
-  process.env.FRONTEND_URL
-].filter(Boolean);
-
 app.use(cors({
   origin: function (origin, callback) {
-    if (!origin) return callback(null, true);
-    // Allow if origin matches allowed list or matches vercel subdomains
-    if (
-      allowedOrigins.indexOf(origin) !== -1 ||
-      process.env.FRONTEND_URL === '*' ||
-      origin.endsWith('.vercel.app')
-    ) {
-      return callback(null, true);
-    }
-    return callback(new Error('Blocked by CORS: ' + origin), false);
+    // Allow all origins to avoid any CORS blocks on localhost, Render, Vercel, or custom domains
+    return callback(null, true);
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
