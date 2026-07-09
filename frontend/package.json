@@ -1,0 +1,9 @@
+{
+  "name": "lead-prospector-frontend",
+  "version": "1.0.0",
+  "description": "Lead Prospector Frontend",
+  "scripts": {
+    "dev": "npx -y vite --port 5173",
+    "start": "npx -y serve -s . -l 5173"
+  }
+}
