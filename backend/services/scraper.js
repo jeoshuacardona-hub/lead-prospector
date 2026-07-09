@@ -146,16 +146,11 @@ async function runScraper(city, niche, limit = 20) {
     if (scrollable) {
       console.log('📜 Desplazando panel de resultados para cargar más negocios...');
       let previousHeight = 0;
-      for (let i = 0; i < 8; i++) {
-        await page.evaluate((el) => {
-          el.scrollTop = el.scrollHeight;
-        }, scrollable);
-        await delay(2000);
-        const currentHeight = await page.evaluate((el) => el.scrollHeight, scrollable);
-        if (currentHeight === previousHeight) break;
-        previousHeight = currentHeight;
+      let noHeightChangeLimit = 3; // Allow up to 3 attempts without height change
+      let noHeightChangeCount = 0;
 
-        // Check if we have enough results visible
+      for (let i = 0; i < 15; i++) {
+        // Check current visible results count
         const visibleCount = await page.$$eval(
           'a[href*="/maps/place"]',
           (links) => {
@@ -165,7 +160,31 @@ async function runScraper(city, niche, limit = 20) {
           }
         );
         console.log(`🔍 Resultados cargados en pantalla: ${visibleCount} / ${limit}`);
-        if (visibleCount >= limit) break;
+        if (visibleCount >= limit) {
+          console.log(`✅ Límite de ${limit} resultados alcanzado en pantalla.`);
+          break;
+        }
+
+        // Scroll container down
+        await page.evaluate((el) => {
+          el.focus();
+          el.scrollTop = el.scrollHeight;
+        }, scrollable);
+        
+        await delay(2500); // Wait for results to render
+
+        const currentHeight = await page.evaluate((el) => el.scrollHeight, scrollable);
+        if (currentHeight === previousHeight) {
+          noHeightChangeCount++;
+          console.log(`⚠️ Altura sin cambios (${noHeightChangeCount}/${noHeightChangeLimit})`);
+          if (noHeightChangeCount >= noHeightChangeLimit) {
+            console.log('🛑 Altura sin cambios consecutiva. Fin de la lista.');
+            break;
+          }
+        } else {
+          noHeightChangeCount = 0;
+          previousHeight = currentHeight;
+        }
       }
     } else {
       console.log('⚠️ No se pudo encontrar el contenedor scrollable, intentando extraer resultados visibles...');
