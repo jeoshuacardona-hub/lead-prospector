@@ -54,21 +54,17 @@ async function searchGoogleMaps(city, niche, limit = 5) {
     throw new Error('No se han configurado URLs de microservicio Scraper.');
   }
 
-  // Try each scraper in rotation, with failover to the next one
-  const startIndex = currentScraperIndex;
-  currentScraperIndex = (currentScraperIndex + 1) % scraperUrls.length;
-
-  for (let attempt = 0; attempt < scraperUrls.length; attempt++) {
-    const idx = (startIndex + attempt) % scraperUrls.length;
+  // Try each scraper in sequence starting from the first (highest priority)
+  for (let idx = 0; idx < scraperUrls.length; idx++) {
     const targetUrl = scraperUrls[idx];
 
     try {
-      console.log(`📡 [Balanceador Scraper] Enviando petición a: ${targetUrl} (Nodo ${idx + 1}/${scraperUrls.length})`);
+      console.log(`📡 [Balanceador Scraper] Enviando petición a: ${targetUrl} (Prioridad ${idx + 1}/${scraperUrls.length})`);
       const results = await callScraper(targetUrl, city, niche, limit);
       return results;
     } catch (error) {
       console.error(`❌ Nodo ${idx + 1} falló: ${error.message}`);
-      if (attempt < scraperUrls.length - 1) {
+      if (idx < scraperUrls.length - 1) {
         console.log(`🔄 Intentando con el siguiente nodo scraper...`);
       } else {
         throw new Error(`Todos los scrapers fallaron. Último error: ${error.message}`);
