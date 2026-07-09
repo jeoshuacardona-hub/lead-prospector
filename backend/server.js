@@ -96,6 +96,31 @@ async function startServer() {
     app.listen(PORT, () => {
       console.log(`🚀 Lead Prospector API corriendo en http://localhost:${PORT}`);
       console.log(`📡 CORS habilitado para http://localhost:5173`);
+      
+      // Auto-keep-warm pinger for scraper services
+      const scraperUrlsForPing = (process.env.SCRAPER_SERVICE_URL || 'http://localhost:3002')
+        .split(',')
+        .map(url => url.trim())
+        .filter(Boolean);
+
+      if (scraperUrlsForPing.length > 0) {
+        console.log('📡 Iniciando bucle de auto-calentamiento para scrapers...');
+        // Run immediately to wake them up on startup
+        scraperUrlsForPing.forEach((url) => {
+          fetch(`${url}/health`).then(res => {
+            if (res.ok) console.log(`✅ Scraper en ${url} despertado con éxito.`);
+          }).catch(() => {});
+        });
+
+        // Repeat every 10 minutes
+        setInterval(() => {
+          scraperUrlsForPing.forEach((url) => {
+            fetch(`${url}/health`).then(res => {
+              if (res.ok) console.log(`✅ Scraper en ${url} se mantiene despierto.`);
+            }).catch(() => {});
+          });
+        }, 10 * 60 * 1000);
+      }
     });
   } catch (error) {
     console.error('❌ Error al inicializar la base de datos:', error.message);

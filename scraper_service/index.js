@@ -207,38 +207,22 @@ async function runScraper(city, niche, limit) {
       }
     }
 
-    // Get all unique place links from the feed
-    const placeLinks = await page.$$eval('a[href*="/maps/place"]', (links) => {
-      const seen = new Set();
-      return links
-        .filter(link => {
-          const href = link.href;
-          if (seen.has(href)) return false;
-          seen.add(href);
-          return true;
-        })
-        .map(link => ({
-          url: link.href,
-          name: link.getAttribute('aria-label') || link.textContent.trim()
-        }));
-    });
-
-    console.log(`📋 Se encontraron ${placeLinks.length} enlaces de negocios`);
+    // Get the result cards elements directly
+    const cards = await page.$$('a[href*="/maps/place"]');
+    console.log(`📋 Se encontraron ${cards.length} elementos de negocios en el panel`);
 
     const results = [];
-    const maxResults = Math.min(placeLinks.length, limit);
+    const maxResults = Math.min(cards.length, limit);
 
-    // Visit each place page to extract detailed info
+    // Click each card to load details via AJAX instead of reloading the page
     for (let i = 0; i < maxResults; i++) {
       try {
-        console.log(`  📍 Extrayendo negocio ${i + 1}/${maxResults}: ${placeLinks[i].name.substring(0, 50)}...`);
+        const cardName = await page.evaluate(el => el.getAttribute('aria-label') || el.textContent.trim(), cards[i]);
+        console.log(`  📍 Extrayendo negocio ${i + 1}/${maxResults}: ${cardName.substring(0, 50)}...`);
 
-        try {
-          await page.goto(placeLinks[i].url, { waitUntil: 'domcontentloaded', timeout: 20000 });
-          await delay(1200);
-        } catch (gotoErr) {
-          console.log(`  ⚠️ Timeout de navegación en negocio ${i + 1} (${gotoErr.message}), intentando extraer datos...`);
-        }
+        // Click the card and wait for the detail panel to load via AJAX
+        await cards[i].click();
+        await delay(1200);
 
         const businessData = await page.evaluate(() => {
           const data = {};
@@ -308,9 +292,12 @@ async function runScraper(city, niche, limit) {
 
         if (businessData.business_name) {
           results.push(businessData);
+        } else if (cardName) {
+          businessData.business_name = cardName;
+          results.push(businessData);
         }
 
-        await randomDelay(800, 2000);
+        await randomDelay(400, 1000);
       } catch (err) {
         console.error(`  ⚠️ Error en negocio ${i + 1}:`, err.message);
       }
@@ -318,10 +305,11 @@ async function runScraper(city, niche, limit) {
 
     console.log(`✅ Extracción de Google Maps completada: ${results.length} negocios`);
 
-    // Try to extract email and social media from websites using fast fetch + cheerio
-    console.log('📧 Extrayendo información de contacto de las páginas web...');
+    // Try to extract email and social media from websites in parallel to save time
+    console.log('📧 Extrayendo información de contacto de las páginas web en paralelo...');
     let enrichedCount = 0;
-    for (const result of results) {
+    
+    await Promise.all(results.map(async (result) => {
       if (result.website) {
         try {
           const contactInfo = await extractContactFromWebsite(result.website);
@@ -334,10 +322,10 @@ async function runScraper(city, niche, limit) {
           if (contactInfo.tiktok) result.tiktok = contactInfo.tiktok;
           if (contactInfo.linkedin) result.linkedin = contactInfo.linkedin;
         } catch (err) {
-          // Ignore website connection timeouts
+          // Ignore connection timeouts
         }
       }
-    }
+    }));
     console.log(`📧 Se enriquecieron ${enrichedCount} leads con datos de contacto`);
 
     return results;
@@ -365,7 +353,7 @@ async function extractContactFromWebsite(url) {
 
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8000);
+    const timeout = setTimeout(() => controller.abort(), 4000);
 
     const response = await fetch(url, {
       signal: controller.signal,
