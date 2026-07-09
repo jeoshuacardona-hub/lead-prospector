@@ -96,8 +96,12 @@ function router() {
 window.addEventListener('hashchange', router);
 window.addEventListener('load', router);
 
-// Run router immediately on module load
-router();
+// Run router when DOM is fully loaded and ready
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', router);
+} else {
+  router();
+}
 
 // Global logout
 window.logout = () => {
