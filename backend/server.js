@@ -86,7 +86,7 @@ async function startServer() {
     // Auto-seed if the database is brand new (0 users)
     const db = getDb();
     const { count } = await db.prepare('SELECT COUNT(*) as count FROM users').get();
-    if (count === 0) {
+    if (parseInt(count, 10) === 0) {
       console.log('ℹ️  Base de datos vacía detectada, ejecutando auto-seeding...');
       await seed();
     } else {

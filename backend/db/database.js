@@ -1,7 +1,9 @@
 const initSqlJs = require('sql.js');
 const fs = require('fs');
 const path = require('path');
-const { Pool } = require('pg');
+const pg = require('pg');
+const { Pool } = pg;
+pg.types.setTypeParser(pg.types.builtins.INT8, (val) => parseInt(val, 10));
 
 const DB_PATH = path.join(__dirname, '..', 'lead_prospector.db');
 
