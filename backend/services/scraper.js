@@ -1,38 +1,6 @@
 const puppeteer = require('puppeteer');
 const cheerio = require('cheerio');
 
-let browserInstance = null;
-
-/**
- * Get or create a Puppeteer browser instance (singleton).
- */
-async function getBrowser() {
-  if (!browserInstance || !browserInstance.isConnected()) {
-    const launchOptions = {
-      headless: 'new',
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-gpu',
-        '--no-first-run',
-        '--no-zygote',
-        '--single-process',
-        '--disable-extensions',
-        '--disable-features=IsolateOrigins,site-per-process',
-        '--disable-blink-features=AutomationControlled'
-      ]
-    };
-
-    if (process.env.PUPPETEER_EXECUTABLE_PATH) {
-      launchOptions.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
-    }
-
-    browserInstance = await puppeteer.launch(launchOptions);
-  }
-  return browserInstance;
-}
-
 /**
  * Simple delay helper.
  */
@@ -47,17 +15,57 @@ function randomDelay(min = 1000, max = 3000) {
   return delay(Math.floor(Math.random() * (max - min) + min));
 }
 
+// Promise-chaining queue to restrict concurrency to exactly 1 search at a time.
+// This prevents memory exhaustion (RAM limit of 512MB exceeded) on Render Free tier.
+let searchQueue = Promise.resolve();
+
 /**
- * Search Google Maps for businesses by city and niche.
- * Returns an array of lead objects with extracted business data.
- *
- * @param {string} city - The city to search in
- * @param {string} niche - The business niche/category to search for
- * @param {number} limit - Maximum number of results to return (default 20, max 50)
- * @returns {Promise<Array>} Array of lead objects
+ * Public search function that queues request sequentially.
  */
 async function searchGoogleMaps(city, niche, limit = 20) {
-  const browser = await getBrowser();
+  return new Promise((resolve, reject) => {
+    searchQueue = searchQueue
+      .then(async () => {
+        try {
+          console.log(`⏱️ Iniciando búsqueda en cola para: "${niche}" en "${city}"`);
+          const results = await runScraper(city, niche, limit);
+          resolve(results);
+        } catch (err) {
+          reject(err);
+        }
+      })
+      .catch((err) => {
+        console.error('Queue error:', err);
+      });
+  });
+}
+
+/**
+ * Internal runner that launches a fresh browser instance, scrapes, and closes it completely.
+ */
+async function runScraper(city, niche, limit = 20) {
+  const launchOptions = {
+    headless: 'new',
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+      '--no-first-run',
+      '--no-zygote',
+      '--disable-extensions',
+      '--disable-features=IsolateOrigins,site-per-process',
+      '--disable-blink-features=AutomationControlled'
+    ]
+  };
+
+  // Use Render system Chrome path if defined, otherwise default to bundled Chromium
+  if (process.env.PUPPETEER_EXECUTABLE_PATH) {
+    launchOptions.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
+  }
+
+  console.log('🚀 Lanzando navegador Puppeteer limpio...');
+  const browser = await puppeteer.launch(launchOptions);
   const page = await browser.newPage();
 
   try {
@@ -67,7 +75,7 @@ async function searchGoogleMaps(city, niche, limit = 20) {
     );
     await page.setViewport({ width: 1920, height: 1080 });
 
-    // Optimize performance: intercept and block images, fonts, and media to save memory and CPU
+    // Block image, font, and media requests to save up to 70% RAM and speed up load times
     await page.setRequestInterception(true);
     page.on('request', (req) => {
       const type = req.resourceType();
@@ -78,7 +86,6 @@ async function searchGoogleMaps(city, niche, limit = 20) {
       }
     });
 
-    // Set extra headers to appear more like a real browser
     await page.setExtraHTTPHeaders({
       'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8'
     });
@@ -86,17 +93,17 @@ async function searchGoogleMaps(city, niche, limit = 20) {
     const searchQuery = `${niche} ${city}`;
     const url = `https://www.google.com/maps/search/${encodeURIComponent(searchQuery)}`;
 
-    console.log(`🌐 Navigating to Google Maps: ${searchQuery}`);
+    console.log(`🌐 Navegando a Google Maps: ${searchQuery}`);
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
     
-    // Wait for the feed or wait a short time to let the results render
+    // Wait for the results feed or fallback to a timeout
     try {
       await page.waitForSelector('a[href*="/maps/place"]', { timeout: 10000 });
     } catch (e) {
       await delay(4000);
     }
 
-    // Accept cookies if prompted (for EU/GDPR regions)
+    // Accept cookies if prompted
     try {
       const acceptBtn = await page.$(
         '[aria-label="Accept all"], [aria-label="Aceptar todo"], button[jsname="b3VHJd"]'
@@ -106,11 +113,11 @@ async function searchGoogleMaps(city, niche, limit = 20) {
         await delay(1000);
       }
     } catch (e) {
-      // Cookie dialog may not appear, ignore
+      // Cookie dialog may not appear
     }
 
-    // Scroll the results panel to load more results (Google Maps lazy-loads)
-    console.log('📜 Scrolling to load more results...');
+    // Scroll results panel to load more results (Google Maps lazy-loads)
+    console.log('📜 Desplazando panel de resultados para cargar más negocios...');
     const scrollable = await page.$('div[role="feed"]');
     if (scrollable) {
       let previousHeight = 0;
@@ -152,7 +159,7 @@ async function searchGoogleMaps(city, niche, limit = 20) {
         }));
     });
 
-    console.log(`📋 Found ${placeLinks.length} place links`);
+    console.log(`📋 Se encontraron ${placeLinks.length} enlaces de negocios`);
 
     const results = [];
     const maxResults = Math.min(placeLinks.length, limit);
@@ -160,7 +167,7 @@ async function searchGoogleMaps(city, niche, limit = 20) {
     // Visit each place page to extract detailed info
     for (let i = 0; i < maxResults; i++) {
       try {
-        console.log(`  📍 Scraping place ${i + 1}/${maxResults}: ${placeLinks[i].name.substring(0, 50)}...`);
+        console.log(`  📍 Extrayendo negocio ${i + 1}/${maxResults}: ${placeLinks[i].name.substring(0, 50)}...`);
 
         await page.goto(placeLinks[i].url, { waitUntil: 'domcontentloaded', timeout: 10000 });
         await delay(1000);
@@ -168,15 +175,15 @@ async function searchGoogleMaps(city, niche, limit = 20) {
         const businessData = await page.evaluate(() => {
           const data = {};
 
-          // Business name - from the main heading
+          // Business name
           const nameEl = document.querySelector('h1');
           data.business_name = nameEl ? nameEl.textContent.trim() : '';
 
-          // Rating - look for the rating span
+          // Rating
           const ratingEl = document.querySelector('div.F7nice span[aria-hidden="true"]');
           data.rating = ratingEl ? parseFloat(ratingEl.textContent) : null;
 
-          // Reviews count - look for review count text
+          // Reviews count
           const reviewsEl = document.querySelector(
             'div.F7nice span[aria-label*="review"], div.F7nice span[aria-label*="reseña"]'
           );
@@ -187,7 +194,7 @@ async function searchGoogleMaps(city, niche, limit = 20) {
             data.reviews_count = null;
           }
 
-          // Extract info from structured data buttons/links
+          // Extract address, phone, website from structured data buttons/links
           const buttons = document.querySelectorAll('button[data-item-id], a[data-item-id]');
           buttons.forEach(btn => {
             const itemId = btn.getAttribute('data-item-id') || '';
@@ -262,15 +269,14 @@ async function searchGoogleMaps(city, niche, limit = 20) {
 
         await randomDelay(800, 2000);
       } catch (err) {
-        console.error(`  ⚠️ Error scraping place ${i + 1}:`, err.message);
+        console.error(`  ⚠️ Error en negocio ${i + 1}:`, err.message);
       }
     }
 
-    await page.close();
-    console.log(`✅ Scraping complete: ${results.length} businesses extracted`);
+    console.log(`✅ Extracción de Google Maps completada: ${results.length} negocios`);
 
-    // Try to extract emails and social media from business websites
-    console.log('📧 Extracting contact info from websites...');
+    // Try to extract emails and social media from websites using fast fetch + cheerio
+    console.log('📧 Extrayendo información de contacto de las páginas web...');
     let enrichedCount = 0;
     for (const result of results) {
       if (result.website) {
@@ -285,30 +291,26 @@ async function searchGoogleMaps(city, niche, limit = 20) {
           if (contactInfo.tiktok) result.tiktok = contactInfo.tiktok;
           if (contactInfo.linkedin) result.linkedin = contactInfo.linkedin;
         } catch (err) {
-          // Silently continue - website may be unreachable
+          // Ignore website connection timeouts
         }
       }
     }
-    console.log(`📧 Enriched ${enrichedCount} leads with contact info from websites`);
+    console.log(`📧 Se enriquecieron ${enrichedCount} leads con datos de contacto`);
 
     return results;
   } catch (error) {
     console.error('❌ Scraper error:', error.message);
-    try {
-      await page.close();
-    } catch (e) {
-      // Page may already be closed
-    }
     throw error;
+  } finally {
+    console.log('🧹 Cerrando navegador Puppeteer y liberando RAM...');
+    await page.close().catch(() => {});
+    await browser.close().catch(() => {});
   }
 }
 
 /**
  * Extract email and social media links from a business website.
  * Uses fetch + cheerio (no browser needed, much faster).
- *
- * @param {string} url - The website URL to scrape
- * @returns {Promise<Object>} Object with email, instagram, facebook, tiktok, linkedin
  */
 async function extractContactFromWebsite(url) {
   const result = {
@@ -347,7 +349,6 @@ async function extractContactFromWebsite(url) {
     const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
     const emails = fullText.match(emailRegex) || [];
 
-    // Filter out common false-positive emails
     const invalidPatterns = [
       'example', 'sentry', 'webpack', 'wixpress', 'schema.org',
       'wordpress', 'gravatar', 'googleapis', 'google.com',
@@ -387,37 +388,10 @@ async function extractContactFromWebsite(url) {
     });
 
   } catch (err) {
-    // Silently fail - website might be down, blocking, or timing out
-    // This is expected behavior for many websites
+    // Silently fail - website might be down
   }
 
   return result;
 }
 
-/**
- * Close the browser instance.
- * Call this when shutting down the server.
- */
-async function closeBrowser() {
-  if (browserInstance) {
-    try {
-      await browserInstance.close();
-    } catch (e) {
-      // Browser may already be closed
-    }
-    browserInstance = null;
-  }
-}
-
-// Graceful shutdown
-process.on('SIGINT', async () => {
-  await closeBrowser();
-  process.exit(0);
-});
-
-process.on('SIGTERM', async () => {
-  await closeBrowser();
-  process.exit(0);
-});
-
-module.exports = { searchGoogleMaps, extractContactFromWebsite, closeBrowser };
+module.exports = { searchGoogleMaps, extractContactFromWebsite };
