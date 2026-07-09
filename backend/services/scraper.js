@@ -87,8 +87,14 @@ async function searchGoogleMaps(city, niche, limit = 20) {
     const url = `https://www.google.com/maps/search/${encodeURIComponent(searchQuery)}`;
 
     console.log(`🌐 Navigating to Google Maps: ${searchQuery}`);
-    await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
-    await delay(3000);
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    
+    // Wait for the feed or wait a short time to let the results render
+    try {
+      await page.waitForSelector('a[href*="/maps/place"]', { timeout: 10000 });
+    } catch (e) {
+      await delay(4000);
+    }
 
     // Accept cookies if prompted (for EU/GDPR regions)
     try {
@@ -156,8 +162,8 @@ async function searchGoogleMaps(city, niche, limit = 20) {
       try {
         console.log(`  📍 Scraping place ${i + 1}/${maxResults}: ${placeLinks[i].name.substring(0, 50)}...`);
 
-        await page.goto(placeLinks[i].url, { waitUntil: 'networkidle2', timeout: 15000 });
-        await delay(1500);
+        await page.goto(placeLinks[i].url, { waitUntil: 'domcontentloaded', timeout: 10000 });
+        await delay(1000);
 
         const businessData = await page.evaluate(() => {
           const data = {};
