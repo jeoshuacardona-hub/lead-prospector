@@ -67,6 +67,118 @@ app.post('/scrape', async (req, res) => {
 });
 
 /**
+ * POST /debug-scrape
+ * Direct debugging endpoint that bypasses the queue and captures screenshots and inner HTML.
+ */
+app.post('/debug-scrape', async (req, res) => {
+  const { city, niche, limit = 2 } = req.body;
+  if (!city || !niche) {
+    return res.status(400).json({ error: 'Ciudad y nicho son requeridos' });
+  }
+
+  const logs = [];
+  const addLog = (msg) => {
+    console.log(`[DEBUG-SCRAPE] ${msg}`);
+    logs.push(`${new Date().toISOString()}: ${msg}`);
+  };
+
+  addLog(`Starting debug scrape for ${niche} in ${city}`);
+  
+  const launchOptions = {
+    headless: 'new',
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+      '--no-first-run',
+      '--no-zygote',
+      '--disable-extensions',
+      '--disable-features=IsolateOrigins,site-per-process',
+      '--disable-blink-features=AutomationControlled'
+    ]
+  };
+
+  if (process.env.PUPPETEER_EXECUTABLE_PATH) {
+    launchOptions.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
+  }
+
+  let browser, page;
+  try {
+    addLog('Launching browser...');
+    browser = await puppeteer.launch(launchOptions);
+    addLog('Browser launched. Opening new page...');
+    page = await browser.newPage();
+    await page.setViewport({ width: 1280, height: 800 });
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+
+    const searchQuery = `${niche} ${city}`;
+    const url = `https://www.google.com/maps/search/${encodeURIComponent(searchQuery)}`;
+    
+    addLog(`Navigating to: ${url}`);
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    addLog('Page navigation finished. Waiting 3 seconds...');
+    await delay(3000);
+
+    const title = await page.title();
+    const bodySnippet = await page.evaluate(() => document.body.innerText.substring(0, 1000));
+    addLog(`Page title: "${title}"`);
+    addLog(`Body snippet: ${bodySnippet.substring(0, 300).replace(/\n/g, ' | ')}`);
+
+    const screenshot1 = await page.screenshot({ encoding: 'base64' });
+    addLog('Screenshot 1 captured.');
+
+    const cookieSelector = '[aria-label="Accept all"], [aria-label="Aceptar todo"], [aria-label="Aceptar"], button[jsname="b3VHJd"]';
+    const hasCookies = await page.evaluate((sel) => !!document.querySelector(sel), cookieSelector);
+    addLog(`Has cookie banner: ${hasCookies}`);
+
+    if (hasCookies) {
+      addLog('Clicking cookies button...');
+      await page.evaluate((sel) => {
+        const btn = document.querySelector(sel);
+        if (btn) btn.click();
+      }, cookieSelector);
+      await delay(2000);
+      addLog('Cookies button clicked.');
+    }
+
+    const cardsCount = await page.evaluate(() => document.querySelectorAll('a[href*="/maps/place"]').length);
+    addLog(`Found ${cardsCount} place cards.`);
+
+    const screenshot2 = await page.screenshot({ encoding: 'base64' });
+    addLog('Screenshot 2 captured.');
+
+    res.json({
+      success: true,
+      logs,
+      title,
+      cardsCount,
+      screenshots: [screenshot1, screenshot2]
+    });
+  } catch (err) {
+    addLog(`Error: ${err.message}`);
+    let errScreenshot;
+    if (page) {
+      try {
+        errScreenshot = await page.screenshot({ encoding: 'base64' });
+      } catch (se) {
+        addLog(`Could not capture error screenshot: ${se.message}`);
+      }
+    }
+    res.status(500).json({
+      success: false,
+      logs,
+      error: err.message,
+      screenshot: errScreenshot
+    });
+  } finally {
+    if (page) await page.close().catch(() => {});
+    if (browser) await browser.close().catch(() => {});
+    addLog('Cleaned up browser and page instances.');
+  }
+});
+
+/**
  * Scraper implementation that runs inside a clean Puppeteer browser instance.
  */
 async function runScraper(city, niche, limit) {
