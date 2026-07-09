@@ -17,20 +17,23 @@ ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
 
 WORKDIR /app
 
-# Copy backend package files
+# Copy backend package files and install production dependencies
 COPY backend/package*.json ./backend/
-
-# Install backend production dependencies
 WORKDIR /app/backend
 RUN npm ci --only=production
 
-# Copy remaining source code
-WORKDIR /app
-COPY backend/ ./backend/
-COPY frontend/ ./frontend/
+# Copy frontend package files, install dependencies, and compile it
+COPY frontend/package*.json /app/frontend/
+WORKDIR /app/frontend
+RUN npm install
+COPY frontend/ ./
+RUN npm run build
+
+# Copy remaining backend source files
+WORKDIR /app/backend
+COPY backend/ ./
 
 # Expose backend port
-WORKDIR /app/backend
 EXPOSE 3001
 
 CMD [ "npm", "start" ]

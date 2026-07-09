@@ -61,18 +61,18 @@ app.use('/api/leads', leadsRoutes);
 app.use('/api/export', exportRoutes);
 app.use('/api/admin', adminRoutes);
 
-// Serve static frontend files in production (raw files, no build step needed)
-const frontendPath = path.join(__dirname, '..', 'frontend');
-if (fs.existsSync(frontendPath)) {
-  console.log('🌐 Serviendo frontend estático desde:', frontendPath);
-  app.use(express.static(frontendPath));
+// Serve static frontend files in production (Vite build output)
+const frontendDistPath = path.join(__dirname, '..', 'frontend', 'dist');
+if (fs.existsSync(frontendDistPath)) {
+  console.log('🌐 Serviendo frontend estático desde:', frontendDistPath);
+  app.use(express.static(frontendDistPath));
   
   // Catch-all route to serve index.html for SPA routing
   app.get('*', (req, res, next) => {
     if (req.path.startsWith('/api')) {
       return next();
     }
-    res.sendFile(path.join(frontendPath, 'index.html'));
+    res.sendFile(path.join(frontendDistPath, 'index.html'));
   });
 }
 
