@@ -263,6 +263,8 @@ async function initDb() {
     dbWrapper.pragma('foreign_keys = ON');
   }
 
+  dbWrapper.isPostgres = isPostgres;
+
   // Create tables with engine-agnostic SQL replacements
   const createTable = async (sqliteSql) => {
     let sql = sqliteSql;
