@@ -26,8 +26,9 @@ router.post('/search', async (req, res) => {
 
     console.log(`🔍 Buscando "${niche}" en "${city}" (límite: ${searchLimit}) - Usuario: ${req.user.username}`);
 
-    // Perform the search
-    const rawResults = await searchGoogleMaps(city, niche, searchLimit);
+    // Scrape a larger pool to filter out already saved leads and maximize free leads
+    const scrapeLimit = Math.min(searchLimit + 20, 50);
+    const rawResults = await searchGoogleMaps(city, niche, scrapeLimit);
     const db = getDb();
 
     // Prepare statement to check if a business is already saved by someone
@@ -40,8 +41,10 @@ router.post('/search', async (req, res) => {
       LIMIT 1
     `);
     
-    // Enrich search results with city, niche and claiming metadata
-    const results = [];
+    // Enrich search results and split between free and already saved
+    const freeResults = [];
+    const occupiedResults = [];
+
     for (const item of rawResults) {
       let alreadySaved = false;
       let savedBy = null;
@@ -54,21 +57,30 @@ router.post('/search', async (req, res) => {
         }
       }
 
-      results.push({
+      const enrichedItem = {
         ...item,
         city,
         niche,
         already_saved: alreadySaved,
         saved_by_name: savedBy
-      });
+      };
+
+      if (alreadySaved) {
+        occupiedResults.push(enrichedItem);
+      } else {
+        freeResults.push(enrichedItem);
+      }
     }
+
+    // Prioritize free results first, then pad with occupied ones up to the requested searchLimit
+    const results = [...freeResults, ...occupiedResults].slice(0, searchLimit);
 
     // Record in search history
     await db.prepare(
       'INSERT INTO search_history (user_id, city, niche, results_count) VALUES (?, ?, ?, ?)'
     ).run(req.user.id, city, niche, results.length);
 
-    console.log(`✅ Búsqueda completada: ${results.length} resultados encontrados`);
+    console.log(`✅ Búsqueda completada: ${results.length} resultados devueltos (${freeResults.length} libres)`);
 
     res.json({
       results,
