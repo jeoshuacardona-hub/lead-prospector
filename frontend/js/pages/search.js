@@ -44,7 +44,11 @@ export function renderSearch(container, state) {
         <div class="form-group">
           <label class="form-label" for="search-limit">📊 Cantidad</label>
           <select id="search-limit" class="select input-lg">
-            <option value="5" selected>5 resultados</option>
+            <option value="10" selected>10 resultados</option>
+            <option value="15">15 resultados</option>
+            <option value="20">20 resultados</option>
+            <option value="30">30 resultados</option>
+            <option value="5">5 resultados</option>
           </select>
         </div>
         <div class="form-group">
