@@ -101,7 +101,7 @@ export async function renderMyLeads(container, state) {
 async function loadLeads() {
   try {
     const isAdmin = localState && localState.user && localState.user.role === 'admin';
-    const data = await api.getLeads({ all: isAdmin });
+    const data = await api.getLeads({ all: isAdmin, limit: 10000 });
     allLeads = Array.isArray(data) ? data : (data.leads || []);
     applyFilters();
   } catch (err) {

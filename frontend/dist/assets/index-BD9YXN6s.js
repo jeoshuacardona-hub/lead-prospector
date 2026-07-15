@@ -75,7 +75,7 @@
         </div>
       </div>
     </div>
-  `;try{let i={totalLeads:0,weekLeads:0,searches:0,enriched:0};if(s){const o=await u.getStats();i.totalLeads=o.totalLeads||0,i.searches=o.totalSearches||0,i.enriched=o.enrichment_rate!=null?Math.round(o.enrichment_rate)+"%":o.enrichmentRate?Math.round(o.enrichmentRate)+"%":"0%",i.weekLeads=o.leads_this_week||o.weekLeads||0}else{const o=await u.getLeads(),E=Array.isArray(o)?o:o.leads||[];i.totalLeads=E.length;const H=new Date;H.setDate(H.getDate()-7),i.weekLeads=E.filter(U=>new Date(U.created_at)>H).length,i.enriched=E.filter(U=>U.enriched||U.is_enriched).length,i.searches="-"}document.getElementById("stats-grid").innerHTML=`
+  `;try{let i={totalLeads:0,weekLeads:0,searches:0,enriched:0};if(s){const o=await u.getStats();i.totalLeads=o.total_leads!=null?o.total_leads:o.totalLeads||0,i.searches=o.total_searches!=null?o.total_searches:o.totalSearches||0,i.enriched=o.enrichment_rate!=null?Math.round(o.enrichment_rate)+"%":o.enrichmentRate?Math.round(o.enrichmentRate)+"%":"0%",i.weekLeads=o.leads_this_week!=null?o.leads_this_week:o.weekLeads||0}else{const o=await u.getLeads(),E=Array.isArray(o)?o:o.leads||[];i.totalLeads=E.length;const H=new Date;H.setDate(H.getDate()-7),i.weekLeads=E.filter(U=>new Date(U.created_at)>H).length,i.enriched=E.filter(U=>U.enriched||U.is_enriched).length,i.searches="-"}document.getElementById("stats-grid").innerHTML=`
       <div class="stat-card stat-card-gradient-1 animate-slide-up stagger-1">
         <span class="stat-icon">📊</span>
         <div class="stat-value">${i.totalLeads}</div>
@@ -343,7 +343,7 @@
     </div>
 
     <div id="leads-pagination" class="mt-6"></div>
-  `,document.getElementById("apply-filters-btn").addEventListener("click",S);const s=document.getElementById("export-csv-btn");s&&s.addEventListener("click",de);const n=document.getElementById("export-excel-btn");n&&n.addEventListener("click",ce),await W()}async function W(){try{const a=_&&_.user&&_.user.role==="admin",e=await u.getLeads({all:a});y=Array.isArray(e)?e:e.leads||[],S()}catch(a){r("Error al cargar leads: "+a.message,"error"),document.getElementById("leads-table-container").innerHTML=`
+  `,document.getElementById("apply-filters-btn").addEventListener("click",S);const s=document.getElementById("export-csv-btn");s&&s.addEventListener("click",de);const n=document.getElementById("export-excel-btn");n&&n.addEventListener("click",ce),await W()}async function W(){try{const a=_&&_.user&&_.user.role==="admin",e=await u.getLeads({all:a,limit:1e4});y=Array.isArray(e)?e:e.leads||[],S()}catch(a){r("Error al cargar leads: "+a.message,"error"),document.getElementById("leads-table-container").innerHTML=`
       <div class="empty-state">
         <span class="empty-icon">⚠️</span>
         <h4 class="empty-title">Error al cargar</h4>

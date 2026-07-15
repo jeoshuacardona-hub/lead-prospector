@@ -46,12 +46,12 @@ export async function renderDashboard(container, state) {
 
     if (isAdmin) {
       const adminStats = await api.getStats();
-      stats.totalLeads = adminStats.totalLeads || 0;
-      stats.searches = adminStats.totalSearches || 0;
+      stats.totalLeads = adminStats.total_leads != null ? adminStats.total_leads : (adminStats.totalLeads || 0);
+      stats.searches = adminStats.total_searches != null ? adminStats.total_searches : (adminStats.totalSearches || 0);
       stats.enriched = adminStats.enrichment_rate != null
         ? Math.round(adminStats.enrichment_rate) + '%'
         : (adminStats.enrichmentRate ? Math.round(adminStats.enrichmentRate) + '%' : '0%');
-      stats.weekLeads = adminStats.leads_this_week || adminStats.weekLeads || 0;
+      stats.weekLeads = adminStats.leads_this_week != null ? adminStats.leads_this_week : (adminStats.weekLeads || 0);
     } else {
       const leads = await api.getLeads();
       const leadsArray = Array.isArray(leads) ? leads : (leads.leads || []);
